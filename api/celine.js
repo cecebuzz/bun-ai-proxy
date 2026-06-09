@@ -1,12 +1,12 @@
 import { Redis } from "@upstash/redis";
 
 const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
 });
 
-const GIFT_CODE = process.env.GIFT_CODE; // ex: "BUN41BW"
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN; // ex: "https://bun-ai.vercel.app"
+const GIFT_CODE = process.env.GIFT_CODE;
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
 
 export default async function handler(req, res) {
   // ── CORS : uniquement ton domaine ──────────────────────────
