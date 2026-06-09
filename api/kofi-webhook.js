@@ -1,8 +1,8 @@
 import { Redis } from "@upstash/redis";
 
 const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
 });
 
 const EXPIRY_MS = 35 * 24 * 60 * 60 * 1000; // 35 jours en ms
@@ -35,6 +35,7 @@ export default async function handler(req, res) {
   const type = payload.type;
   if (type !== "Subscription") {
     // Ignorer proprement les dons et commandes shop
+    // Ko-fi exige un 200 même pour les événements ignorés, sinon il retry
     return res.status(200).json({ ignored: true, type });
   }
 
@@ -48,7 +49,7 @@ export default async function handler(req, res) {
   // Repousse l'expiry à chaque webhook (premier paiement OU renouvellement)
   const expiry = Date.now() + EXPIRY_MS;
 
-  // Clé Redis : "paid:<email>" — identique à check-access.js
+  // Clé Redis : "paid:<email>" — identique à check-access.js et celine.js
   await redis.set(`paid:${email}`, expiry);
 
   console.log(`[kofi] Access granted: ${email} → expires ${new Date(expiry).toISOString()}`);
