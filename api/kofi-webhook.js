@@ -1,40 +1,57 @@
 import { Redis } from "@upstash/redis";
 
-const redis = Redis.fromEnv();
-const VERIF_TOKEN = process.env.KOFI_VERIFICATION_TOKEN;
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
-// Durée d'accès accordée après un paiement (35 jours = 1 mois + marge)
-const ACCESS_DAYS = 35;
+const EXPIRY_MS = 35 * 24 * 60 * 60 * 1000; // 35 jours en ms
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-
-  try {
-    // Ko-fi envoie les données dans un champ "data" encodé en form-urlencoded
-    const raw = req.body?.data;
-    const payload = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!payload) return res.status(400).json({ error: "No data" });
-
-    // Sécurité : on vérifie que la notif vient bien de TON Ko-fi
-    if (payload.verification_token !== VERIF_TOKEN) {
-      return res.status(401).json({ error: "Bad token" });
-    }
-
-    // On ne traite que les abonnements (Subscription)
-    const email = (payload.email || "").trim().toLowerCase();
-    const tier = payload.tier_name || "";
-    const isSub = payload.type === "Subscription" || payload.is_subscription_payment;
-
-    // Accès accordé si abonnement à un de tes tiers Bun AI
-    const grants = /bun ai|bunny behaviour/i.test(tier);
-
-    if (email && isSub && grants) {
-      const expires = Date.now() + ACCESS_DAYS * 86400000;
-      await redis.set(`paid:${email}`, expires);
-    }
-
-    return res.status(200).json({ ok: true });
-  } catch (e) {
-    return res.status(200).json({ ok: true }); // toujours répondre 200 à Ko-fi
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
   }
+
+  // ── 1. Vérification du token Ko-fi ────────────────────────
+  // Ko-fi envoie le payload en application/x-www-form-urlencoded
+  // avec un champ "data" contenant un JSON stringifié
+  let payload;
+  try {
+    const raw = req.body?.data;
+    if (!raw) return res.status(400).json({ error: "Missing data field" });
+    payload = JSON.parse(raw);
+  } catch {
+    return res.status(400).json({ error: "Invalid payload" });
+  }
+
+  const token = payload.verification_token;
+  if (!token || token !== process.env.KOFI_VERIFICATION_TOKEN) {
+    return res.status(401).json({ error: "Invalid verification token" });
+  }
+
+  // ── 2. Filtrer : uniquement les memberships ───────────────
+  // type peut être "Donation", "Subscription", "Shop Order"
+  // Ko-fi utilise "Subscription" pour les memberships récurrents
+  const type = payload.type;
+  if (type !== "Subscription") {
+    // Ignorer proprement les dons et commandes shop
+    return res.status(200).json({ ignored: true, type });
+  }
+
+  // ── 3. Récupérer l'email et écrire dans Redis ─────────────
+  const email = payload.email?.toLowerCase().trim();
+  if (!email) {
+    return res.status(400).json({ error: "Missing email in payload" });
+  }
+
+  // Expiry = maintenant + 35 jours (timestamp ms)
+  // Repousse l'expiry à chaque webhook (premier paiement OU renouvellement)
+  const expiry = Date.now() + EXPIRY_MS;
+
+  // Clé Redis : "paid:<email>" — identique à check-access.js
+  await redis.set(`paid:${email}`, expiry);
+
+  console.log(`[kofi] Access granted: ${email} → expires ${new Date(expiry).toISOString()}`);
+
+  return res.status(200).json({ ok: true, email, expiry });
 }
