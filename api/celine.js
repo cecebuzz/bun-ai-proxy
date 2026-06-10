@@ -8,24 +8,20 @@ const redis = new Redis({
 const GIFT_CODE = (process.env.GIFT_CODE || "").trim().toUpperCase();
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
 
-// Pose les 3 headers CORS sur la réponse
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-access-token");
 }
 
-// Renvoie une réponse JSON AVEC les headers CORS garantis
 function send(res, status, body) {
   setCors(res);
   return res.status(status).json(body);
 }
 
 export default async function handler(req, res) {
-  // ── CORS posé en tout premier, avant TOUTE logique ─────────
   setCors(res);
 
-  // ── Preflight : répond 200 AVANT toute vérification ────────
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -37,12 +33,22 @@ export default async function handler(req, res) {
   // ── Token d'accès ──────────────────────────────────────────
   const rawToken = req.headers["x-access-token"];
   if (!rawToken) {
-    return send(res, 401, { error: "No access token" });
+    // DEBUG TEMPORAIRE — montre ce que le proxy reçoit réellement
+    return send(res, 401, {
+      error: "No access token",
+      debug: {
+        receivedHeaders: Object.keys(req.headers),
+        hasToken: "x-access-token" in req.headers,
+        tokenValue: req.headers["x-access-token"] || null,
+        method: req.method,
+        giftCodeSet: GIFT_CODE.length > 0,
+      },
+    });
   }
 
   const token = String(rawToken).trim();
 
-  // ── 1. Code cadeau (casse normalisée des 2 côtés) ──────────
+  // ── 1. Code cadeau ─────────────────────────────────────────
   let hasAccess = GIFT_CODE.length > 0 && token.toUpperCase() === GIFT_CODE;
 
   // ── 2. Sinon, email dans Redis ─────────────────────────────
@@ -54,7 +60,17 @@ export default async function handler(req, res) {
   }
 
   if (!hasAccess) {
-    return send(res, 403, { error: "Access denied" });
+    // DEBUG TEMPORAIRE — token reçu mais refusé
+    return send(res, 403, {
+      error: "Access denied",
+      debug: {
+        tokenReceived: token,
+        tokenUpper: token.toUpperCase(),
+        giftCode: GIFT_CODE,
+        giftCodeSet: GIFT_CODE.length > 0,
+        match: token.toUpperCase() === GIFT_CODE,
+      },
+    });
   }
 
   // ── 3. Appel Anthropic ─────────────────────────────────────
