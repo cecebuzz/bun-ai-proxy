@@ -5,26 +5,28 @@ const redis = new Redis({
   token: process.env.KV_REST_API_TOKEN,
 });
 
-const GIFT_CODE = process.env.GIFT_CODE;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
+const GIFT_CODE = (process.env.GIFT_CODE || "").trim().toUpperCase();
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
 
 export default async function handler(req, res) {
-  // ── CORS : uniquement ton domaine ──────────────────────────
+  // ── CORS ───────────────────────────────────────────────────
   res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-access-token");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  // ── Vérification du token d'accès ──────────────────────────
-  const token = req.headers["x-access-token"];
-  if (!token) return res.status(401).json({ error: "No access token" });
+  // ── Récupération du token ──────────────────────────────────
+  const rawToken = req.headers["x-access-token"];
+  if (!rawToken) return res.status(401).json({ error: "No access token" });
 
-  const isGiftCode = token.toUpperCase() === GIFT_CODE;
-  let hasAccess = isGiftCode;
+  const token = String(rawToken).trim();
 
+  // ── 1. Comparaison code cadeau (casse normalisée des 2 côtés) ──
+  let hasAccess = token.toUpperCase() === GIFT_CODE && GIFT_CODE.length > 0;
+
+  // ── 2. Sinon, vérification email dans Redis ────────────────
   if (!hasAccess) {
-    // Vérifie l'email dans Redis — clé : "paid:<email>", valeur : timestamp d'expiry
     const expiry = await redis.get(`paid:${token.toLowerCase()}`);
     if (expiry && Date.now() < Number(expiry)) {
       hasAccess = true;
@@ -33,7 +35,7 @@ export default async function handler(req, res) {
 
   if (!hasAccess) return res.status(403).json({ error: "Access denied" });
 
-  // ── Appel Anthropic ────────────────────────────────────────
+  // ── 3. Appel Anthropic ─────────────────────────────────────
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
