@@ -16,9 +16,8 @@ export default async function handler(req, res) {
     const email = (req.body?.email || "").trim().toLowerCase();
     if (!email) return res.status(200).json({ access: false });
 
-    const expires = await redis.get(`paid:${email}`);
-    // accès valide si une date existe ET qu'elle n'est pas dépassée
-    const access = expires && Number(expires) > Date.now();
+    const expiry = await redis.get("paid:" + email);
+    const access = expiry && Number(expiry) > Date.now();
 
     return res.status(200).json({ access: !!access });
   } catch (e) {
