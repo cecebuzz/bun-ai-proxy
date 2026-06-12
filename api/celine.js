@@ -7,11 +7,12 @@ const redis = new Redis({
 
 const GIFT_CODE = (process.env.GIFT_CODE || "").trim().toUpperCase();
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
+const FREE_DAILY_LIMIT = 3;
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-access-token");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
 function send(res, status, body) {
@@ -22,58 +23,41 @@ function send(res, status, body) {
 export default async function handler(req, res) {
   setCors(res);
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return send(res, 405, { error: "Method not allowed" });
 
-  if (req.method !== "POST") {
-    return send(res, 405, { error: "Method not allowed" });
-  }
+  // ── Extraire le token du body (plus de header custom) ──────
+  const { accessToken: rawToken, ...anthropicBody } = req.body || {};
 
-  // ── Token d'accès ──────────────────────────────────────────
-  const rawToken = req.headers["x-access-token"];
-  if (!rawToken) {
-    // DEBUG TEMPORAIRE — montre ce que le proxy reçoit réellement
-    return send(res, 401, {
-      error: "No access token",
-      debug: {
-        receivedHeaders: Object.keys(req.headers),
-        hasToken: "x-access-token" in req.headers,
-        tokenValue: req.headers["x-access-token"] || null,
-        method: req.method,
-        giftCodeSet: GIFT_CODE.length > 0,
-      },
-    });
-  }
+  if (!rawToken) return send(res, 401, { error: "No access token" });
 
   const token = String(rawToken).trim();
 
-  // ── 1. Code cadeau ─────────────────────────────────────────
-  let hasAccess = GIFT_CODE.length > 0 && token.toUpperCase() === GIFT_CODE;
-
-  // ── 2. Sinon, email dans Redis ─────────────────────────────
-  if (!hasAccess) {
-    const expiry = await redis.get(`paid:${token.toLowerCase()}`);
-    if (expiry && Date.now() < Number(expiry)) {
-      hasAccess = true;
+  // ── 1. Token FREE — utilisateur gratuit ───────────────────
+  if (token.toUpperCase() === "FREE") {
+    const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+      || req.headers["x-real-ip"]
+      || "unknown";
+    const key = `free:${ip}`;
+    const used = await redis.incr(key);
+    if (used === 1) await redis.expire(key, 60 * 60 * 24);
+    if (used > FREE_DAILY_LIMIT) {
+      return send(res, 403, { error: "Free limit reached" });
     }
+  } else {
+    // ── 2. Code cadeau ─────────────────────────────────────
+    let hasAccess = GIFT_CODE.length > 0 && token.toUpperCase() === GIFT_CODE;
+
+    // ── 3. Email premium dans Redis ────────────────────────
+    if (!hasAccess) {
+      const expiry = await redis.get(`paid:${token.toLowerCase()}`);
+      if (expiry && Date.now() < Number(expiry)) hasAccess = true;
+    }
+
+    if (!hasAccess) return send(res, 403, { error: "Access denied" });
   }
 
-  if (!hasAccess) {
-    // DEBUG TEMPORAIRE — token reçu mais refusé
-    return send(res, 403, {
-      error: "Access denied",
-      debug: {
-        tokenReceived: token,
-        tokenUpper: token.toUpperCase(),
-        giftCode: GIFT_CODE,
-        giftCodeSet: GIFT_CODE.length > 0,
-        match: token.toUpperCase() === GIFT_CODE,
-      },
-    });
-  }
-
-  // ── 3. Appel Anthropic ─────────────────────────────────────
+  // ── Appel Anthropic (sans le accessToken dans le body) ─────
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -82,7 +66,7 @@ export default async function handler(req, res) {
         "x-api-key": process.env.ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(anthropicBody),
     });
     const data = await r.json();
     return send(res, r.status, data);
