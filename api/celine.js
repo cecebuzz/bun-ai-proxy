@@ -1,3 +1,10 @@
+import { Redis } from "@upstash/redis";
+
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
+});
+
 const GIFT_CODE = (process.env.GIFT_CODE || "").trim().toUpperCase();
 
 export default async function handler(req, res) {
@@ -16,8 +23,15 @@ export default async function handler(req, res) {
     const isFree = !token || token.toUpperCase() === "FREE";
     // Code cadeau → premium
     const isGift = GIFT_CODE.length > 0 && token.toUpperCase() === GIFT_CODE;
-    // Email Ko-fi → on ajoutera Redis après
-    const isEmail = token.includes("@");
+
+    // Email Ko-fi → vérifier dans Redis
+    let isEmail = false;
+    if (!isFree && !isGift && token.includes("@")) {
+      const expiry = await redis.get("paid:" + token.toLowerCase());
+      if (expiry && Date.now() < Number(expiry)) {
+        isEmail = true;
+      }
+    }
 
     if (!isFree && !isGift && !isEmail) {
       return res.status(403).json({ error: "Access denied" });
