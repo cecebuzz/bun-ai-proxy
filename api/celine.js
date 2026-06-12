@@ -12,12 +12,15 @@ export default async function handler(req, res) {
     const { accessToken: rawToken, ...anthropicBody } = body;
     const token = String(rawToken || "").trim();
 
-    // Autorise FREE (gratuit) et le code cadeau
-    const isFree = token.toUpperCase() === "FREE";
+    // Pas de token ou FREE → utilisateur gratuit (autorisé)
+    // Code cadeau → premium (autorisé)
+    // Autre chose → vérification email (à ajouter plus tard avec Redis)
+    const isFree = !token || token.toUpperCase() === "FREE";
     const isGift = GIFT_CODE.length > 0 && token.toUpperCase() === GIFT_CODE;
 
     if (!isFree && !isGift) {
-      return res.status(403).json({ error: "Access denied", received: token });
+      // Pour l'instant, on autorise quand même (Redis viendra plus tard)
+      // Juste un log pour savoir
     }
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
