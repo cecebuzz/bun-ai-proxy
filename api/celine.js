@@ -1,3 +1,4 @@
+// v6
 import { Redis } from "@upstash/redis";
 
 const redis = new Redis({
